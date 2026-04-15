@@ -50,6 +50,11 @@ public class PortalPlacement : MonoBehaviour
                     return;
                 }
 
+                if (!inPortal.CanTeleport)
+                {
+                    return;
+                }
+
                 var outPortal = inPortal.OtherPortal;
 
                 // Update position of raycast origin with small offset.

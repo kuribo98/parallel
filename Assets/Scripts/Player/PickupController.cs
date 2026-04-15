@@ -26,6 +26,7 @@ public class PickupController : MonoBehaviour
     // Runtime state
     private InteractableObject _heldObject = null;
     private InteractableObject _nearestObject = null;
+    private PortalButton _nearestButton = null;
     private Collider _heldCollider = null;
     void OnEnable()  => interactAction.Enable();
     void OnDisable() => interactAction.Disable();
@@ -100,18 +101,50 @@ public class PickupController : MonoBehaviour
         Collider[] hits = Physics.OverlapSphere(transform.position, 20f, interactableLayer);
 
         InteractableObject closest = null;
+        PortalButton closestButton = null;
         float closestDist = float.MaxValue;
 
         foreach (Collider col in hits)
         {
-            InteractableObject io = col.GetComponent<InteractableObject>();
-            if (io == null || io.IsHeld) continue;
-
-            float dist = Vector3.Distance(transform.position, io.transform.position);
-            if (dist <= io.interactionRadius && dist < closestDist)
+            InteractableObject io = col.GetComponentInParent<InteractableObject>();
+            if (io != null && !io.IsHeld)
             {
-                closestDist = dist;
-                closest = io;
+                float ioDist = Vector3.Distance(transform.position, io.transform.position);
+                if (ioDist <= io.interactionRadius && ioDist < closestDist)
+                {
+                    closestDist = ioDist;
+                    closest = io;
+                    closestButton = null;
+                }
+            }
+
+            PortalButton button = col.GetComponentInParent<PortalButton>();
+            if (button != null && button.CanPress)
+            {
+                float buttonDist = button.GetInteractionDistanceFrom(transform.position);
+                if (buttonDist <= button.interactionRadius && buttonDist < closestDist)
+                {
+                    closestDist = buttonDist;
+                    closest = null;
+                    closestButton = button;
+                }
+            }
+        }
+
+        for (int i = 0; i < PortalButton.ActiveButtons.Count; ++i)
+        {
+            PortalButton button = PortalButton.ActiveButtons[i];
+            if (button == null || !button.CanPress)
+            {
+                continue;
+            }
+
+            float buttonDist = button.GetInteractionDistanceFrom(transform.position);
+            if (buttonDist <= button.interactionRadius && buttonDist < closestDist)
+            {
+                closestDist = buttonDist;
+                closest = null;
+                closestButton = button;
             }
         }
 
@@ -119,10 +152,17 @@ public class PickupController : MonoBehaviour
         if (_nearestObject != null && _nearestObject != closest)
             _nearestObject.SetPromptVisible(false);
 
+        if (_nearestButton != null && _nearestButton != closestButton)
+            _nearestButton.SetPromptVisible(false);
+
         _nearestObject = closest;
+        _nearestButton = closestButton;
 
         if (_nearestObject != null)
             _nearestObject.SetPromptVisible(true);
+
+        if (_nearestButton != null)
+            _nearestButton.SetPromptVisible(true);
     }
 
     // Pickup / drop
@@ -132,6 +172,10 @@ public class PickupController : MonoBehaviour
         if (_heldObject != null)
         {
             Drop();
+        }
+        else if (_nearestButton != null)
+        {
+            _nearestButton.Press();
         }
         else if (_nearestObject != null && holdPoint != null)
         {

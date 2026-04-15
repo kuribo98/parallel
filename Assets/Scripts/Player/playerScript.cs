@@ -2,6 +2,7 @@ using UnityEngine;
 using UnityEngine.InputSystem;
 using UnityEngine.SceneManagement;
 using System.Collections;
+using System.Collections.Generic;
 
 // Handles player movement, jumping, wall-jumping, animation, and death
 
@@ -34,24 +35,84 @@ public class playerScript : MonoBehaviour
     public bool canDie = true;
     public bool isDead = false;
 
+    [Header("Grounding")]
+    [SerializeField]
+    [Tooltip("If enabled, the player can jump on any sufficiently floor-like collider except objects on Jump Excluded Layers. If disabled, the old Ground tag behavior is used.")]
+    private bool jumpOnAnyLayerExceptExcluded;
+
+    [SerializeField]
+    [Tooltip("When Jump On Any Layer Except Excluded is enabled, these layers cannot be jumped from.")]
+    private LayerMask jumpExcludedLayers;
+
+    [SerializeField]
+    [Range(0.0f, 1.0f)]
+    [Tooltip("Minimum upward contact normal for a collision to count as jumpable ground. Higher values require flatter floors.")]
+    private float minimumJumpNormalY = 0.5f;
+
+    [Header("Ground Stick")]
+    [SerializeField]
+    [Tooltip("If enabled, the player is gently held down onto nearby walkable ground until jumping or leaving an edge.")]
+    private bool stickToGround;
+
+    [SerializeField]
+    [Tooltip("Layers that should not pull the player down with ground stick.")]
+    private LayerMask groundStickExcludedLayers;
+
+    [SerializeField]
+    [Tooltip("Optional tag that prevents ground stick. Leave empty to ignore tags.")]
+    private string groundStickExcludedTag = "";
+
+    [SerializeField]
+    [Min(0.01f)]
+    [Tooltip("How far below the player's collider to look for ground before applying stickiness.")]
+    private float groundStickDistance = 0.35f;
+
+    [SerializeField]
+    [Min(0.0f)]
+    [Tooltip("The downward velocity used to keep the player attached to slopes and floors.")]
+    private float groundStickDownVelocity = 4.0f;
+
+    [SerializeField]
+    [Range(0.0f, 1.0f)]
+    [Tooltip("Minimum upward normal for a surface to use ground stick. Higher values prevent sticking to steep slopes.")]
+    private float minimumGroundStickNormalY = 0.5f;
+
+    [Header("Height Death")]
+    [SerializeField]
+    private bool dieBelowHeight;
+
+    [SerializeField]
+    private float minimumHeight = -50.0f;
+
+    [SerializeField]
+    private bool dieAboveHeight;
+
+    [SerializeField]
+    private float maximumHeight = 100.0f;
+
     [Header("Input Actions")]
     [SerializeField] private InputAction moveAction;
     [SerializeField] private InputAction jumpAction;
 
     // Private state
     private PlayerPortalable portalable;
+    private Collider playerCollider;
 
-    private bool isGrounded = false;    // true while colliding with "Ground" tag
-    private bool grounded = false;      // true while inside a ground trigger zone
+    public bool HasMoveInput => moveAction.ReadValue<Vector2>().sqrMagnitude > 0.01f;
+
+    private readonly HashSet<Collider> groundedColliders = new HashSet<Collider>();
+    private readonly HashSet<Collider> groundedTriggers = new HashSet<Collider>();
     private bool isJumping = false;
     private bool justJumped = false;
     private bool onWall = false;
     private bool willDie = false;
     private float warpImmunityTime = 0f;
+    private float groundStickDisabledUntil = 0f;
 
     private Vector3 lookDir = Vector3.zero;
     private Vector3 wallDirection = Vector3.zero;
     private Vector3 addedVelocity = Vector3.zero;
+    private Vector3 currentGroundNormal = Vector3.up;
     private float ignoreInput = 0f;
 
 
@@ -60,11 +121,12 @@ public class playerScript : MonoBehaviour
     {
         rb = GetComponent<Rigidbody>();
         portalable = GetComponent<PlayerPortalable>();
+        playerCollider = GetComponent<Collider>();
     }
 
     void Start()
     {
-        pAnimator.SetBool("onWall", false);
+        SetAnimatorBool("onWall", false);
     }
 
     void OnEnable()
@@ -83,11 +145,16 @@ public class playerScript : MonoBehaviour
     {
         if (isDead) return;
 
+        CheckHeightDeath();
+        if (isDead) return;
+
+        if (portalable != null && portalable.IsSplineFollowing) return;
+
         // Wall jump
         if (jumpAction.WasPressedThisFrame() && onWall && !IsOnGround && !justJumped)
         {
             jumpSound.PlayOneShot(jumpClip);
-            pAnimator.SetTrigger("wallJumped");
+            SetAnimatorTrigger("wallJumped");
             addedVelocity = new Vector3(wallDirection.x * 7f, 10f, wallDirection.z * 7f);
             rb.linearVelocity = new Vector3(rb.linearVelocity.x, 5f, rb.linearVelocity.z);
             ignoreInput = 2f;
@@ -104,8 +171,18 @@ public class playerScript : MonoBehaviour
 
         if (isDead) return;
 
+        if (portalable != null && portalable.IsSplineFollowing)
+        {
+            SetAnimatorBool("isWalking", false);
+            SetAnimatorBool("jumpButton", false);
+            lookDir = Vector3.zero;
+            justJumped = false;
+            return;
+        }
+
         HandleMovement();
         HandleJump();
+        ApplyGroundStick();
         HandleFallAnimation();
         UpdateLookDirection();
 
@@ -130,17 +207,28 @@ public class playerScript : MonoBehaviour
         // but still allows addedVelocity (momentum) to physically push the character
         float inputMultiplier = Mathf.Clamp01(1f - ignoreInput);
         
-        Vector3 targetVelocity = new Vector3(
+        Vector3 flatMoveVelocity = new Vector3(
             hInput * speed * inputMultiplier + addedVelocity.x,
-            rb.linearVelocity.y,
+            0.0f,
             vInput * speed * inputMultiplier + addedVelocity.z
         );
+
+        Vector3 targetVelocity = new Vector3(
+            flatMoveVelocity.x,
+            rb.linearVelocity.y,
+            flatMoveVelocity.z
+        );
+
+        if (TryGetSlopeMoveVelocity(flatMoveVelocity, out Vector3 slopeMoveVelocity))
+        {
+            targetVelocity = slopeMoveVelocity;
+        }
 
         // Apply movement vector directly instead of fighting rb.position
         rb.linearVelocity = targetVelocity;
 
         bool isWalking = Mathf.Abs(hInput * speed) >= 1f || Mathf.Abs(vInput * speed) >= 1f;
-        pAnimator.SetBool("isWalking", isWalking);
+        SetAnimatorBool("isWalking", isWalking);
 
         // Store for look-direction rotation
         lookDir.x = rb.linearVelocity.x;
@@ -157,34 +245,35 @@ public class playerScript : MonoBehaviour
             if (IsOnGround && rb.linearVelocity.y < 5f)
             {
                 jumpSound.PlayOneShot(jumpClip);
-                pAnimator.SetTrigger("jumpWhenFalling");
+                SetAnimatorTrigger("jumpWhenFalling");
+                DisableGroundStickFor(0.2f);
+                ClearGrounding();
                 rb.linearVelocity = new Vector3(0f, 5.5f * jumpHeight, 0f);
-                pAnimator.ResetTrigger("Landed");
-                pAnimator.SetTrigger("Jumped");
+                ResetAnimatorTrigger("Landed");
+                SetAnimatorTrigger("Jumped");
                 isJumping = true;
-                grounded = false;
                 justJumped = true;
-                pAnimator.SetBool("isOnFloor", false);
+                SetAnimatorBool("isOnFloor", false);
             }
         }
 
-        pAnimator.SetBool("jumpButton", jumpHeld);
+        SetAnimatorBool("jumpButton", jumpHeld);
     }
 
     // Triggers falling animations based on vertical velocity
     private void HandleFallAnimation()
     {
         bool falling = (isJumping && rb.linearVelocity.y < 1f)
-                    || (!grounded && rb.linearVelocity.y < -2f);
+                    || (!IsOnGround && rb.linearVelocity.y < -2f);
 
         if (falling)
         {
-            pAnimator.SetTrigger("Falling");
-            pAnimator.ResetTrigger("jumpWhenFalling");
-            pAnimator.ResetTrigger("wallJumped");
-            pAnimator.SetBool("isOnFloor", false);
-            pAnimator.SetBool("isWalking", false);
-            grounded = false;
+            SetAnimatorTrigger("Falling");
+            ResetAnimatorTrigger("jumpWhenFalling");
+            ResetAnimatorTrigger("wallJumped");
+            SetAnimatorBool("isOnFloor", false);
+            SetAnimatorBool("isWalking", false);
+            ClearGrounding();
         }
     }
 
@@ -202,10 +291,25 @@ public class playerScript : MonoBehaviour
         }
     }
 
+    private void CheckHeightDeath()
+    {
+        if (!canDie)
+        {
+            return;
+        }
+
+        float currentHeight = transform.position.y;
+        if ((dieBelowHeight && currentHeight < minimumHeight) ||
+            (dieAboveHeight && currentHeight > maximumHeight))
+        {
+            KillPlayer();
+        }
+    }
+
     // Ground / wall state
 
     // true if the player is standing on something
-    private bool IsOnGround => isGrounded || grounded;
+    private bool IsOnGround => groundedColliders.Count > 0 || groundedTriggers.Count > 0;
 
     public void almostFloor()
     {
@@ -221,7 +325,7 @@ public class playerScript : MonoBehaviour
     {
         if (isDead) return;
         onWall = isOnWall;
-        pAnimator.SetBool("onWall", isOnWall);
+        SetAnimatorBool("onWall", isOnWall);
     }
 
     public void SetWallDirection(Vector3 wDirection)
@@ -255,6 +359,18 @@ public class playerScript : MonoBehaviour
 
         // Fast-suspend user input briefly so their world-space input doesn't pull them back into the portal
         ignoreInput = 1f;
+        DisableGroundStickFor(0.25f);
+    }
+
+    public void PreventFallDamageFor(float seconds)
+    {
+        willDie = false;
+        warpImmunityTime = Mathf.Max(warpImmunityTime, Time.time + Mathf.Max(0f, seconds));
+    }
+
+    public void DisableGroundStickFor(float seconds)
+    {
+        groundStickDisabledUntil = Mathf.Max(groundStickDisabledUntil, Time.time + Mathf.Max(0f, seconds));
     }
 
     // Freeze / Revive helpers
@@ -267,7 +383,16 @@ public class playerScript : MonoBehaviour
 
     void OnTriggerEnter(Collider collider)
     {
-        if (isDead || collider.gameObject.layer == 10 || collider.gameObject.layer == 8)
+        if (isDead)
+            return;
+
+        BouncePad bouncePad = collider.GetComponentInParent<BouncePad>();
+        if (bouncePad != null && bouncePad.IsEnabled)
+        {
+            PreventFallDamageFor(0.5f);
+        }
+
+        if (collider.gameObject.layer == 10 || collider.gameObject.layer == 8)
             return;
 
         // Do not take fall damage or reset states if touching a Portal trigger
@@ -277,14 +402,20 @@ public class playerScript : MonoBehaviour
             return;
         }
 
+        if (!IsGroundTrigger(collider))
+        {
+            return;
+        }
+
+        groundedTriggers.Add(collider);
+
         // Reset jump/fall animation state on landing in a trigger zone
-        pAnimator.ResetTrigger("Jumped");
-        pAnimator.ResetTrigger("Falling");
-        pAnimator.ResetTrigger("Landed");
-        pAnimator.ResetTrigger("wallJumped");
+        ResetAnimatorTrigger("Jumped");
+        ResetAnimatorTrigger("Falling");
+        ResetAnimatorTrigger("Landed");
+        ResetAnimatorTrigger("wallJumped");
         isJumping = false;
-        grounded = true;
-        pAnimator.SetBool("isOnFloor", true);
+        SetAnimatorBool("isOnFloor", true);
 
         // Fall-damage death
         if (willDie && canDie && Time.time > warpImmunityTime)
@@ -293,43 +424,324 @@ public class playerScript : MonoBehaviour
 
     void OnTriggerStay(Collider collider)
     {
-        if (collider.gameObject.layer == 6 && !isDead)
+        if (!isDead && IsGroundTrigger(collider))
         {
-            pAnimator.SetBool("isOnFloor", true);
-            grounded = true;
+            SetAnimatorBool("isOnFloor", true);
+            groundedTriggers.Add(collider);
         }
     }
 
     void OnTriggerExit(Collider collider)
     {
         if (isDead) return;
-        pAnimator.SetBool("isOnFloor", false);
-        pAnimator.ResetTrigger("Landed");
-        grounded = false;
+        groundedTriggers.Remove(collider);
+        RefreshGroundedAnimator();
     }
 
     void OnCollisionEnter(Collision collision)
     {
-        if ((collision.gameObject.CompareTag("Ground") || grounded) && !isDead)
+        if (isDead)
+        {
+            return;
+        }
+
+        UpdateCollisionGrounding(collision);
+
+        if (IsGroundCollision(collision) || IsOnGround)
         {
             isJumping = false;
-            pAnimator.ResetTrigger("Jumped");
-            pAnimator.ResetTrigger("Falling");
-            pAnimator.SetTrigger("Landed");
+            ResetAnimatorTrigger("Jumped");
+            ResetAnimatorTrigger("Falling");
+            SetAnimatorTrigger("Landed");
+            SetAnimatorBool("isOnFloor", true);
         }
     }
 
     void OnCollisionStay(Collision collision)
     {
-        isGrounded = collision.gameObject.CompareTag("Ground");
+        if (!isDead)
+        {
+            UpdateCollisionGrounding(collision);
+        }
     }
 
     void OnCollisionExit(Collision collision)
     {
-        if (collision.gameObject.CompareTag("Ground"))
+        if (collision.collider != null)
         {
-            isGrounded = false;
-            grounded = false;
+            groundedColliders.Remove(collision.collider);
+        }
+
+        if (groundedColliders.Count == 0)
+        {
+            currentGroundNormal = Vector3.up;
+        }
+
+        RefreshGroundedAnimator();
+    }
+
+    private void UpdateCollisionGrounding(Collision collision)
+    {
+        if (collision.collider == null)
+        {
+            return;
+        }
+
+        if (TryGetGroundCollisionNormal(collision, out Vector3 groundNormal))
+        {
+            groundedColliders.Add(collision.collider);
+            currentGroundNormal = groundNormal;
+            SetAnimatorBool("isOnFloor", true);
+        }
+        else
+        {
+            groundedColliders.Remove(collision.collider);
+            RefreshGroundedAnimator();
+        }
+    }
+
+    private bool IsGroundCollision(Collision collision)
+    {
+        return TryGetGroundCollisionNormal(collision, out _);
+    }
+
+    private bool TryGetGroundCollisionNormal(Collision collision, out Vector3 groundNormal)
+    {
+        groundNormal = Vector3.up;
+
+        if (collision.collider == null)
+        {
+            return false;
+        }
+
+        if (jumpOnAnyLayerExceptExcluded)
+        {
+            return !IsLayerInMask(collision.gameObject.layer, jumpExcludedLayers) &&
+                TryGetWalkableContactNormal(collision, minimumJumpNormalY, out groundNormal);
+        }
+
+        if (!collision.gameObject.CompareTag("Ground"))
+        {
+            return false;
+        }
+
+        return TryGetWalkableContactNormal(collision, minimumJumpNormalY, out groundNormal);
+    }
+
+    private bool IsGroundTrigger(Collider triggerCollider)
+    {
+        if (triggerCollider == null)
+        {
+            return false;
+        }
+
+        if (jumpOnAnyLayerExceptExcluded)
+        {
+            return false;
+        }
+
+        return triggerCollider.gameObject.layer != 10 && triggerCollider.gameObject.layer != 8;
+    }
+
+    private bool TryGetWalkableContactNormal(Collision collision, float minimumNormalY, out Vector3 groundNormal)
+    {
+        groundNormal = Vector3.up;
+        float highestNormalY = float.NegativeInfinity;
+
+        for (int i = 0; i < collision.contactCount; ++i)
+        {
+            Vector3 normal = collision.GetContact(i).normal;
+            if (normal.y >= minimumNormalY && normal.y > highestNormalY)
+            {
+                groundNormal = normal;
+                highestNormalY = normal.y;
+            }
+        }
+
+        return highestNormalY > float.NegativeInfinity;
+    }
+
+    private void ApplyGroundStick()
+    {
+        if (!stickToGround ||
+            Time.time < groundStickDisabledUntil ||
+            justJumped ||
+            !IsOnGround ||
+            isDead ||
+            (portalable != null && (portalable.IsInPortal || portalable.IsSplineFollowing)))
+        {
+            return;
+        }
+
+        Vector3 flatVelocity = rb.linearVelocity;
+        flatVelocity.y = 0.0f;
+        if (TryGetSlopeMoveVelocity(flatVelocity, out Vector3 slopeVelocity) && slopeVelocity.y > 0.05f)
+        {
+            return;
+        }
+
+        if (!TryFindGroundStickSurface())
+        {
+            return;
+        }
+
+        Vector3 velocity = rb.linearVelocity;
+        if (velocity.y > -groundStickDownVelocity)
+        {
+            velocity.y = -groundStickDownVelocity;
+            rb.linearVelocity = velocity;
+        }
+    }
+
+    private bool TryGetSlopeMoveVelocity(Vector3 flatMoveVelocity, out Vector3 slopeMoveVelocity)
+    {
+        slopeMoveVelocity = flatMoveVelocity;
+
+        if (!stickToGround ||
+            !IsOnGround ||
+            currentGroundNormal.y < minimumGroundStickNormalY ||
+            flatMoveVelocity.sqrMagnitude < 0.0001f)
+        {
+            return false;
+        }
+
+        Vector3 projectedVelocity = Vector3.ProjectOnPlane(flatMoveVelocity, currentGroundNormal);
+        if (projectedVelocity.sqrMagnitude < 0.0001f)
+        {
+            return false;
+        }
+
+        slopeMoveVelocity = projectedVelocity.normalized * flatMoveVelocity.magnitude;
+        return true;
+    }
+
+    private bool TryFindGroundStickSurface()
+    {
+        if (playerCollider == null)
+        {
+            return false;
+        }
+
+        Bounds bounds = playerCollider.bounds;
+        float radius = Mathf.Max(0.05f, Mathf.Min(bounds.extents.x, bounds.extents.z) * 0.85f);
+        float castDistance = bounds.extents.y + groundStickDistance;
+        int layerMask = GetGroundProbeLayerMask();
+        RaycastHit[] hits = Physics.SphereCastAll(
+            bounds.center,
+            radius,
+            Vector3.down,
+            castDistance,
+            layerMask,
+            QueryTriggerInteraction.Ignore);
+
+        for (int i = 0; i < hits.Length; ++i)
+        {
+            Collider hitCollider = hits[i].collider;
+            if (hitCollider == null ||
+                hitCollider == playerCollider ||
+                hitCollider.transform.IsChildOf(transform) ||
+                transform.IsChildOf(hitCollider.transform))
+            {
+                continue;
+            }
+
+            if (CanStickToGround(hitCollider, hits[i].normal))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private bool CanStickToGround(Collider hitCollider, Vector3 normal)
+    {
+        if (normal.y < minimumGroundStickNormalY)
+        {
+            return false;
+        }
+
+        return CanUseGroundStickCollider(hitCollider);
+    }
+
+    private bool CanUseGroundStickCollider(Collider hitCollider)
+    {
+        if (hitCollider == null)
+        {
+            return false;
+        }
+
+        GameObject hitObject = hitCollider.gameObject;
+        if (IsLayerInMask(hitObject.layer, groundStickExcludedLayers))
+        {
+            return false;
+        }
+
+        return string.IsNullOrWhiteSpace(groundStickExcludedTag) || !hitObject.CompareTag(groundStickExcludedTag);
+    }
+
+    private bool IsSelfCollider(Collider otherCollider)
+    {
+        return otherCollider == null ||
+            otherCollider == playerCollider ||
+            otherCollider.transform.IsChildOf(transform) ||
+            transform.IsChildOf(otherCollider.transform);
+    }
+
+    private int GetGroundProbeLayerMask()
+    {
+        return playerMask.value == 0 ? ~0 : ~playerMask.value;
+    }
+
+    private void RefreshGroundedAnimator()
+    {
+        if (isDead)
+        {
+            return;
+        }
+
+        bool onGroundNow = IsOnGround;
+        SetAnimatorBool("isOnFloor", onGroundNow);
+
+        if (!onGroundNow)
+        {
+            ResetAnimatorTrigger("Landed");
+        }
+    }
+
+    private void ClearGrounding()
+    {
+        groundedColliders.Clear();
+        groundedTriggers.Clear();
+        currentGroundNormal = Vector3.up;
+    }
+
+    private static bool IsLayerInMask(int layer, LayerMask mask)
+    {
+        return (mask.value & (1 << layer)) != 0;
+    }
+
+    private void SetAnimatorBool(string parameterName, bool value)
+    {
+        if (pAnimator != null)
+        {
+            pAnimator.SetBool(parameterName, value);
+        }
+    }
+
+    private void SetAnimatorTrigger(string parameterName)
+    {
+        if (pAnimator != null)
+        {
+            pAnimator.SetTrigger(parameterName);
+        }
+    }
+
+    private void ResetAnimatorTrigger(string parameterName)
+    {
+        if (pAnimator != null)
+        {
+            pAnimator.ResetTrigger(parameterName);
         }
     }
 
@@ -338,6 +750,8 @@ public class playerScript : MonoBehaviour
     private void KillPlayer()
     {
         isDead = true;
+        ClearGrounding();
+        pAnimator = null;
 
         Vector3 oldVelocity = rb.linearVelocity;
         Vector3 oldPosition = playerObject.transform.position;

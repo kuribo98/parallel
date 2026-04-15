@@ -16,23 +16,34 @@ public class PortalCamera : MonoBehaviour
     [SerializeField]
     private int iterations = 7;
 
-    private RenderTexture tempTexture1;
-    private RenderTexture tempTexture2;
+    private RenderTexture[] portalTextures;
 
     private Camera mainCamera;
+    private bool isRenderingPortals;
 
     private void Awake()
     {
         mainCamera = GetComponent<Camera>();
 
-        tempTexture1 = new RenderTexture(Screen.width, Screen.height, 24, RenderTextureFormat.ARGB32);
-        tempTexture2 = new RenderTexture(Screen.width, Screen.height, 24, RenderTextureFormat.ARGB32);
+        if (portalCamera != null)
+        {
+            // This camera is rendered manually by this script. If Unity renders it normally too,
+            // beginCameraRendering can re-enter and produce invalid viewport/frustum warnings.
+            portalCamera.enabled = false;
+        }
+
+        portalTextures = new RenderTexture[portals.Length];
     }
 
     private void Start()
     {
-        portals[0].Renderer.material.mainTexture = tempTexture1;
-        portals[1].Renderer.material.mainTexture = tempTexture2;
+        for (int i = 0; i < portals.Length && i < portalTextures.Length; ++i)
+        {
+            if (portals[i] != null)
+            {
+                portals[i].SetPortalTexture(portalTextures[i]);
+            }
+        }
     }
 
     private void OnEnable()
@@ -45,29 +56,42 @@ public class PortalCamera : MonoBehaviour
         RenderPipeline.beginCameraRendering -= UpdateCamera;
     }
 
+    private void OnDestroy()
+    {
+        ReleasePortalTextures();
+    }
+
     void UpdateCamera(ScriptableRenderContext SRC, Camera camera)
     {
-        if (!portals[0].IsPlaced || !portals[1].IsPlaced)
+        if (isRenderingPortals || camera != mainCamera || portalCamera == null)
         {
             return;
         }
 
-        if (portals[0].Renderer.isVisible)
+        EnsurePortalTextures();
+        isRenderingPortals = true;
+
+        try
         {
-            portalCamera.targetTexture = tempTexture1;
-            for (int i = iterations - 1; i >= 0; --i)
+            for (int i = 0; i < portals.Length && i < portalTextures.Length; ++i)
             {
-                RenderCamera(portals[0], portals[1], i, SRC);
+                var inPortal = portals[i];
+                if (inPortal == null || !inPortal.CanRenderPortalView || !inPortal.Renderer.isVisible)
+                {
+                    continue;
+                }
+
+                portalCamera.targetTexture = portalTextures[i];
+                for (int iteration = iterations - 1; iteration >= 0; --iteration)
+                {
+                    RenderCamera(inPortal, inPortal.OtherPortal, iteration, SRC);
+                }
             }
         }
-
-        if(portals[1].Renderer.isVisible)
+        finally
         {
-            portalCamera.targetTexture = tempTexture2;
-            for (int i = iterations - 1; i >= 0; --i)
-            {
-                RenderCamera(portals[1], portals[0], i, SRC);
-            }
+            portalCamera.targetTexture = null;
+            isRenderingPortals = false;
         }
     }
 
@@ -79,6 +103,8 @@ public class PortalCamera : MonoBehaviour
         Transform cameraTransform = portalCamera.transform;
         cameraTransform.position = transform.position;
         cameraTransform.rotation = transform.rotation;
+        portalCamera.rect = new Rect(0.0f, 0.0f, 1.0f, 1.0f);
+        portalCamera.ResetProjectionMatrix();
 
         for(int i = 0; i <= iterationID; ++i)
         {
@@ -99,10 +125,66 @@ public class PortalCamera : MonoBehaviour
         Vector4 clipPlaneCameraSpace =
             Matrix4x4.Transpose(Matrix4x4.Inverse(portalCamera.worldToCameraMatrix)) * clipPlaneWorldSpace;
 
-        var newMatrix = mainCamera.CalculateObliqueMatrix(clipPlaneCameraSpace);
+        var newMatrix = portalCamera.CalculateObliqueMatrix(clipPlaneCameraSpace);
         portalCamera.projectionMatrix = newMatrix;
 
         // Render the camera to its render target.
         UniversalRenderPipeline.RenderSingleCamera(SRC, portalCamera);
+    }
+
+    private void EnsurePortalTextures()
+    {
+        if (portalTextures == null || portalTextures.Length != portals.Length)
+        {
+            ReleasePortalTextures();
+            portalTextures = new RenderTexture[portals.Length];
+        }
+
+        int width = Mathf.Max(1, mainCamera != null ? mainCamera.pixelWidth : Screen.width);
+        int height = Mathf.Max(1, mainCamera != null ? mainCamera.pixelHeight : Screen.height);
+
+        for (int i = 0; i < portalTextures.Length; ++i)
+        {
+            RenderTexture texture = portalTextures[i];
+            if (texture != null && texture.width == width && texture.height == height)
+            {
+                continue;
+            }
+
+            if (texture != null)
+            {
+                texture.Release();
+                Destroy(texture);
+            }
+
+            texture = new RenderTexture(width, height, 24, RenderTextureFormat.ARGB32)
+            {
+                name = $"Portal Texture {i}"
+            };
+            portalTextures[i] = texture;
+
+            if (i < portals.Length && portals[i] != null)
+            {
+                portals[i].SetPortalTexture(texture);
+            }
+        }
+    }
+
+    private void ReleasePortalTextures()
+    {
+        if (portalTextures == null)
+        {
+            return;
+        }
+
+        for (int i = 0; i < portalTextures.Length; ++i)
+        {
+            if (portalTextures[i] != null)
+            {
+                portalTextures[i].Release();
+                Destroy(portalTextures[i]);
+                portalTextures[i] = null;
+            }
+        }
     }
 }

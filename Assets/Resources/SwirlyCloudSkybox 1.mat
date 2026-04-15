@@ -1,0 +1,45 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!21 &2100000
+Material:
+  serializedVersion: 8
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_Name: SwirlyCloudSkybox 1
+  m_Shader: {fileID: 4800000, guid: 81b808f0a1114c9ab2aa9e243f2ea6d5, type: 3}
+  m_Parent: {fileID: 0}
+  m_ModifiedSerializedProperties: 0
+  m_ValidKeywords: []
+  m_InvalidKeywords: []
+  m_LightmapFlags: 4
+  m_EnableInstancingVariants: 0
+  m_DoubleSidedGI: 0
+  m_CustomRenderQueue: -1
+  stringTagMap: {}
+  disabledShaderPasses: []
+  m_LockedProperties: 
+  m_SavedProperties:
+    serializedVersion: 3
+    m_TexEnvs: []
+    m_Ints: []
+    m_Floats:
+    - _CloudScale: 1.36
+    - _Contrast: 1.3
+    - _DetailScale: 4.26
+    - _Exposure: 2.2
+    - _HorizonFog: 0.03
+    - _PrimarySpeed: 0.069
+    - _SecondarySpeed: 0.116
+    - _SwirlSpeed: 0
+    - _SwirlStrength: 0
+    - _WarpScale: 2.51
+    m_Colors:
+    - _BottomColor: {r: 0.03, g: 0.05, b: 0.14, a: 1}
+    - _HighlightColor: {r: 0.27843142, g: 0.31055164, b: 0.7254902, a: 1}
+    - _MidColor: {r: 0, g: 0, b: 0, a: 1}
+    - _SwirlTint: {r: 0.7395213, g: 0.45882353, b: 0.7529412, a: 1}
+    - _TopColor: {r: 0.21350005, g: 0, b: 0.3679245, a: 1}
+  m_BuildTextureStacks: []
+  m_AllowLocking: 1

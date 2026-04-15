@@ -1,0 +1,46 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!21 &2100000
+Material:
+  serializedVersion: 8
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_Name: DistantCloudSkybox 1
+  m_Shader: {fileID: 4800000, guid: a523db2fc4f94f86bb61416efcbec902, type: 3}
+  m_Parent: {fileID: 0}
+  m_ModifiedSerializedProperties: 0
+  m_ValidKeywords: []
+  m_InvalidKeywords: []
+  m_LightmapFlags: 4
+  m_EnableInstancingVariants: 0
+  m_DoubleSidedGI: 0
+  m_CustomRenderQueue: -1
+  stringTagMap: {}
+  disabledShaderPasses: []
+  m_LockedProperties: 
+  m_SavedProperties:
+    serializedVersion: 3
+    m_TexEnvs: []
+    m_Ints: []
+    m_Floats:
+    - _CloudDepth: 2.6
+    - _CloudScale: 4.02
+    - _DensityStrength: 0.62
+    - _DensityThreshold: 0.703
+    - _Exposure: 4
+    - _HorizonGlow: 0
+    - _PrimarySpeed: 0.051
+    - _SecondarySpeed: 0.045
+    - _Softness: 0.4
+    - _WarpScale: 1.55
+    - _WarpStrength: 0.72
+    m_Colors:
+    - _BlueCloudColor: {r: 0.12, g: 0.39, b: 0.95, a: 1}
+    - _HighlightColor: {r: 0.82, g: 0.9, b: 1, a: 1}
+    - _HorizonColor: {r: 0.02, g: 0.03, b: 0.08, a: 1}
+    - _PurpleCloudColor: {r: 0.5, g: 0.24, b: 0.92, a: 1}
+    - _VoidColor: {r: 0, g: 0, b: 0, a: 1}
+  m_BuildTextureStacks: []
+  m_AllowLocking: 1

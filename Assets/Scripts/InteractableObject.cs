@@ -33,9 +33,9 @@ public class InteractableObject : MonoBehaviour
     {
         _rb = GetComponent<Rigidbody>();
 
-        // Fall back to Camera.main if no camera was assigned in the Inspector
+        // Fall back to the scene's "Main Camera" object if no camera was assigned in the Inspector.
         if (promptCamera == null)
-            promptCamera = Camera.main;
+            promptCamera = FindPromptCamera();
 
         // Convert the sprite to a Texture2D so we can draw it with GUI.DrawTexture
         if (promptSprite != null)
@@ -60,9 +60,9 @@ public class InteractableObject : MonoBehaviour
     {
         _isHeld = true;
         _showPrompt = false;
-        _rb.isKinematic = true;
         _rb.linearVelocity = Vector3.zero;
         _rb.angularVelocity = Vector3.zero;
+        _rb.isKinematic = true;
         transform.SetParent(holdPoint);
         transform.localPosition = Vector3.zero;
         transform.localRotation = Quaternion.identity;
@@ -84,7 +84,11 @@ public class InteractableObject : MonoBehaviour
         if (!_showPrompt || _promptTexture == null) return;
 
         // Project the object's world position to screen space
+        if (promptCamera == null)
+            promptCamera = FindPromptCamera();
+
         if (promptCamera == null) return;
+
         Vector3 screenPos = promptCamera.WorldToScreenPoint(transform.position);
 
         // Don't draw if the object is behind the camera
@@ -99,6 +103,17 @@ public class InteractableObject : MonoBehaviour
     }
 
     // Utility
+    private static Camera FindPromptCamera()
+    {
+        GameObject mainCameraObject = GameObject.Find("Main Camera");
+        if (mainCameraObject != null && mainCameraObject.TryGetComponent(out Camera namedCamera))
+        {
+            return namedCamera;
+        }
+
+        return Camera.main;
+    }
+
     private static Texture2D SpriteToTexture(Sprite sprite)
     {
         // If the sprite occupies the full texture, return it directly
